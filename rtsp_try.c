@@ -73,11 +73,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
 		exit(1);
 	}
+	// if (argc > 2)
+	// {
+	// 	fprintf(stderr, "\n Usage: %s -<timeout-sec>\n\n", argv[0]);
+	// 	fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 3 \n\n", argv[0]);
+	// 	fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
+	// 	exit(1);
+	// }
 
 	char timeout[10];
 	char *url = "rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
-	char *protocols = "tcp,udp";
-	char *out_filename = "output";
+	// Não fazer hardcode nos protocolos, resulta em segfault no strtok()
+	char *protocols = argv[2];
+	//char *out_filename = "output";
 	char *curr_protocol = NULL;
 	int vstream_index = -1;
 	int ret = 0;
@@ -91,7 +99,8 @@ int main(int argc, char **argv)
 	AVCodecContext *codec_ctx = NULL;
 	AVCodecParameters *codec_param = NULL;
 	AVCodec *codec = NULL;
-	AVStream *vStream = NULL, *outStream = NULL;
+	AVStream *vStream = NULL;
+	//, *outStream = NULL;
 	AVPacket *pPkt = NULL;
 	AVFrame *pFrm = NULL;
 	AVDictionary *opts = NULL;
@@ -116,13 +125,14 @@ int main(int argc, char **argv)
 
 	// Verificar a melhor forma de preencher esses dois campos NULL..
 	// O out_filename vai mudar constantemente, melhor não ter ?
-	avformat_alloc_output_context2(&out_fmt_ctx, NULL, NULL, out_filename);
-	if (!out_fmt_ctx)
-	{
-		fprintf(stderr, "Could not create output context\n");
-		exit(1);
-	}
+	// avformat_alloc_output_context2(&out_fmt_ctx, NULL, NULL, out_filename);
+	// if (!out_fmt_ctx)
+	// {
+	// 	fprintf(stderr, "Could not create output context\n");
+	// 	exit(1);
+	// }
 
+	
 	while ((curr_protocol = strtok(protocols, ",")) != NULL)
 	{
 		fprintf(stdout, "Trying transport protocol %s .. \n", curr_protocol);
@@ -185,17 +195,17 @@ int main(int argc, char **argv)
 	//
 	//
 	//
-	outStream = avformat_new_stream(out_fmt_ctx, NULL);
-	if (!outStream)
-	{
-		fprintf(stderr, "Failed allocating output stream\n");
-		exit(1);
-	}
-	if (avcodec_parameters_copy(outStream->codecpar, codec_param) < 0)
-	{
-		fprintf(stderr, "Failed to copy codec parameters\n");
-		exit(1);
-	}
+	// outStream = avformat_new_stream(out_fmt_ctx, NULL);
+	// if (!outStream)
+	// {
+	// 	fprintf(stderr, "Failed allocating output stream\n");
+	// 	exit(1);
+	// }
+	// if (avcodec_parameters_copy(outStream->codecpar, codec_param) < 0)
+	// {
+	// 	fprintf(stderr, "Failed to copy codec parameters\n");
+	// 	exit(1);
+	// }
 	//
 	//
 	//
@@ -236,20 +246,19 @@ int main(int argc, char **argv)
 	//
 	//
 
-	if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE))
-	{
-		if (avio_open(&out_fmt_ctx->pb, out_filename, AVIO_FLAG_READ_WRITE) < 0)
-		{
-			fprintf(stderr, "Could not open output file '%s'", out_filename);
-			exit(1);
-		}
-	}
-
-	if (avformat_write_header(out_fmt_ctx, NULL) < 0)
-	{
-		fprintf(stderr, "Error occurred when opening output file\n");
-		exit(1);
-	}
+	// if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE))
+	// {
+	// 	if (avio_open(&out_fmt_ctx->pb, out_filename, AVIO_FLAG_READ_WRITE) < 0)
+	// 	{
+	// 		fprintf(stderr, "Could not open output file '%s'", out_filename);
+	// 		exit(1);
+	// 	}
+	// }
+	// if (avformat_write_header(out_fmt_ctx, NULL) < 0)
+	// {
+	// 	fprintf(stderr, "Error occurred when opening output file\n");
+	// 	exit(1);
+	// }
 	//
 	//
 	//
@@ -257,35 +266,38 @@ int main(int argc, char **argv)
 
 	// av_dump_format(in_fmt_ctx, vstream_index, stdout, 0);
 	// printf("%d\nFOI\n", vstream_index);
+	
 	pPkt = av_packet_alloc();
 	pFrm = av_frame_alloc();
 
 	FILE *fd;
 	AVBufferRef *buff;
 	// buff = av_buffer_allocz(sizeof(uint8_t) * 1920 * 1080);
-	int flag = 0;
+	int flag = 0, count = 0;
 	int respPack, respFram;
-
+	fd = fopen("saida.h264", "wb");
 	while (1)
 	{
-		AVStream *in_stream, *out_stream;
-		if (av_read_frame(in_fmt_ctx, pPkt) < 0)
+		respPack = av_read_frame(in_fmt_ctx, pPkt);
+		if (respPack < 0)
 			break;
 
 		if (pPkt->stream_index == vstream_index)
 		{
-			out_stream = out_fmt_ctx->streams[vstream_index];
+			if(count < 500)
+			{
+				fprintf(stdout, "Frame %d -> Size: %dB\n", count, pPkt->size);
+				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+			}
+			else{
+				break;
+			}
 
-			pPkt->pts = av_rescale_q_rnd(pPkt->pts, in_stream->time_base, out_stream->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
-			pPkt->dts = av_rescale_q_rnd(pPkt->dts, in_stream->time_base, out_stream->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
-
-			pPkt->duration = av_rescale_q(pPkt->duration, in_stream->time_base, out_stream->time_base);
-			// https://ffmpeg.org/doxygen/trunk/structAVPacket.html#ab5793d8195cf4789dfb3913b7a693903
-			pPkt->pos = -1;
-
+			count++;
 			av_packet_unref(pPkt);
 		}
 	}
+	fclose(fd);
 
 	av_frame_free(&pFrm);
 	av_packet_free(&pPkt);
