@@ -49,46 +49,25 @@ void generate_img_output(AVFrame *frame, char *filename)
 	/* Cb e Cr */
 }
 
-static void save_gray_frame(unsigned char *buf, int wrap, int xsize, int ysize, char *filename)
-{
-	FILE *f;
-	int i;
-	f = fopen(filename, "w");
-	// writing the minimal required header for a pgm file format
-	// portable graymap format -> https://en.wikipedia.org/wiki/Netpbm_format#PGM_example
-	fprintf(f, "P5\n%d %d\n%d\n", xsize, ysize, 255);
-
-	// writing line by line
-	for (i = 0; i < ysize; i++)
-		fwrite(buf + i * wrap, 1, xsize, f);
-	fclose(f);
-}
-
 int main(int argc, char **argv)
 {
-	if (argc < 3 || argc > 4)
+	if (argc != 4 && argc != 5)
 	{
-		fprintf(stderr, "\n Usage: %s <url> <protocols> -<timeout-sec>\n\n", argv[0]);
-		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 3 \n\n", argv[0]);
+		fprintf(stderr, "\n Usage: %s <url> <protocols> <split_frames> -<timeout-sec>\n\n", argv[0]);
+		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 500 \n\n", argv[0]);
 		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
-		exit(1);
+		exit(1); 
 	}
-	// if (argc > 2)
-	// {
-	// 	fprintf(stderr, "\n Usage: %s -<timeout-sec>\n\n", argv[0]);
-	// 	fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 3 \n\n", argv[0]);
-	// 	fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
-	// 	exit(1);
-	// }
 
 	char timeout[10];
 	char *url = "rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
 	// Não fazer hardcode nos protocolos, resulta em segfault no strtok()
 	char *protocols = argv[2];
-	//char *out_filename = "output";
+	// Ver como converte string para int mais eficiente
+	int counter_frames = 500;
 	char *curr_protocol = NULL;
 	int vstream_index = -1;
-	int ret = 0;
+	char *nome_saida = "SAIDA_1.h264";
 
 	// av_register_all();
 	avformat_network_init();
@@ -100,7 +79,6 @@ int main(int argc, char **argv)
 	AVCodecParameters *codec_param = NULL;
 	AVCodec *codec = NULL;
 	AVStream *vStream = NULL;
-	//, *outStream = NULL;
 	AVPacket *pPkt = NULL;
 	AVFrame *pFrm = NULL;
 	AVDictionary *opts = NULL;
@@ -117,9 +95,9 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (argc == 4)
+	if (argc == 5)
 	{
-		sprintf(timeout, "%s000000", argv[3]);
+		sprintf(timeout, "%s000000", argv[4]);
 		av_dict_set(&opts, "stimeout", timeout, 0);
 	}
 
@@ -132,7 +110,6 @@ int main(int argc, char **argv)
 	// 	exit(1);
 	// }
 
-	
 	while ((curr_protocol = strtok(protocols, ",")) != NULL)
 	{
 		fprintf(stdout, "Trying transport protocol %s .. \n", curr_protocol);
@@ -162,7 +139,7 @@ int main(int argc, char **argv)
 	}
 
 	fprintf(stdout, "Finding stream index...\n");
-	ret = av_find_best_stream(in_fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+	int ret = av_find_best_stream(in_fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
 
 	if (ret < 0)
 	{
@@ -239,13 +216,14 @@ int main(int argc, char **argv)
 	if ((ret = avcodec_open2(codec_ctx, codec, &opts)) < 0)
 	{
 		fprintf(stderr, "Failed to open %s codec\n", av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
-		return ret;
+		return -1;
 	}
-	//
-	//
-	//
-	//
 
+
+	//
+	//
+	//
+	//
 	// if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE))
 	// {
 	// 	if (avio_open(&out_fmt_ctx->pb, out_filename, AVIO_FLAG_READ_WRITE) < 0)
@@ -264,18 +242,15 @@ int main(int argc, char **argv)
 	//
 	//
 
-	// av_dump_format(in_fmt_ctx, vstream_index, stdout, 0);
-	// printf("%d\nFOI\n", vstream_index);
-	
 	pPkt = av_packet_alloc();
-	pFrm = av_frame_alloc();
+	// pFrm = av_frame_alloc();
 
 	FILE *fd;
-	AVBufferRef *buff;
-	// buff = av_buffer_allocz(sizeof(uint8_t) * 1920 * 1080);
-	int flag = 0, count = 0;
-	int respPack, respFram;
-	fd = fopen("saida.h264", "wb");
+
+	int count = 0, respPack;
+
+	fd = fopen(nome_saida, "wb");
+	// fd = fopen("saida.h264", "wb");
 	while (1)
 	{
 		respPack = av_read_frame(in_fmt_ctx, pPkt);
@@ -284,13 +259,16 @@ int main(int argc, char **argv)
 
 		if (pPkt->stream_index == vstream_index)
 		{
-			if(count < 500)
+			if (count < counter_frames)
 			{
 				fprintf(stdout, "Frame %d -> Size: %dB\n", count, pPkt->size);
 				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
 			}
-			else{
-				break;
+			else
+			{
+				fclose(fd);
+				sprintf(nome_saida, "SAIDA%d.h264", (count / counter_frames) + 1);
+				fd = fopen(nome_saida, "wb");
 			}
 
 			count++;
