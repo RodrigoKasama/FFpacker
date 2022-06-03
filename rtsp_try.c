@@ -17,7 +17,7 @@ void generate_img_output(AVFrame *frame, char *filename)
 	// AVFrame *pframe = *frame;
 	FILE *fd;
 	int offset = frame->width;
-	int stream_lenght = frame->height * frame->width; // * 3;
+	int stream_lenght = frame->height * frame->width * 3;
 	unsigned char vetBytes[stream_lenght];
 
 	fprintf(stdout, "%dx%d=%d pixels reconhecidos...\n", frame->width, frame->height, stream_lenght);
@@ -26,15 +26,11 @@ void generate_img_output(AVFrame *frame, char *filename)
 	/* Y */
 	for (int i = 0; i < frame->height; i++)
 	{
-		fprintf(stderr, "Linha %d -> ", i);
 		for (int j = 0; j < frame->width; j++)
 		{
 			vetBytes[frame->width * i + j] = frame->data[0][frame->linesize[0] * i + j];
-			fprintf(stderr, "%d ", frame->data[0][frame->linesize[0] * i + j]);
 		}
-		fprintf(stderr, "\n");
 	}
-	// fprintf(stderr, "FOi aki\n");
 
 	fd = fopen(filename, "wb");
 
@@ -45,8 +41,15 @@ void generate_img_output(AVFrame *frame, char *filename)
 
 	fclose(fd);
 
-	// fprintf(stderr, "FOi aki2\n");
-	/* Cb e Cr */
+	/* Cb and Cr */
+	for (int i = 0; i < frame->height / 2; i++)
+	{
+		for (int j = 0; j < frame->width / 2; j++)
+		{
+			frame->data[1][i * frame->linesize[1] + j];
+			frame->data[2][i * frame->linesize[2] + j];
+		}
+	}
 }
 
 int main(int argc, char **argv)
@@ -56,18 +59,20 @@ int main(int argc, char **argv)
 		fprintf(stderr, "\n Usage: %s <url> <protocols> <split_frames> -<timeout-sec>\n\n", argv[0]);
 		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 500 \n\n", argv[0]);
 		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
-		exit(1); 
+		exit(1);
 	}
 
 	char timeout[10];
 	char *url = "rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
+
 	// Não fazer hardcode nos protocolos, resulta em segfault no strtok()
 	char *protocols = argv[2];
+
 	// Ver como converte string para int mais eficiente
-	int counter_frames = 500;
+	int counter_frames = 300;
 	char *curr_protocol = NULL;
 	int vstream_index = -1;
-	char *nome_saida = "SAIDA_1.h264";
+	char out_filename[13];
 
 	// av_register_all();
 	avformat_network_init();
@@ -79,7 +84,7 @@ int main(int argc, char **argv)
 	AVCodecParameters *codec_param = NULL;
 	AVCodec *codec = NULL;
 	AVStream *vStream = NULL;
-	AVPacket *pPkt = NULL;
+	AVPacket *pPkt = NULL, *pPkt_keyframe = NULL;
 	AVFrame *pFrm = NULL;
 	AVDictionary *opts = NULL;
 
@@ -243,14 +248,16 @@ int main(int argc, char **argv)
 	//
 
 	pPkt = av_packet_alloc();
+	pPkt_keyframe = av_packet_alloc();
 	// pFrm = av_frame_alloc();
 
 	FILE *fd;
 
-	int count = 0, respPack;
+	int count = 0, respPack, count_files = 0;
 
-	fd = fopen(nome_saida, "wb");
-	// fd = fopen("saida.h264", "wb");
+	sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
+	fd = fopen(out_filename, "wb");
+
 	while (1)
 	{
 		respPack = av_read_frame(in_fmt_ctx, pPkt);
@@ -259,23 +266,60 @@ int main(int argc, char **argv)
 
 		if (pPkt->stream_index == vstream_index)
 		{
-			if (count < counter_frames)
+			pPkt->pts = (int64_t)count;
+
+			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo
+			if (count < (counter_frames - 1))
 			{
-				fprintf(stdout, "Frame %d -> Size: %dB\n", count, pPkt->size);
+				fprintf(stdout, "Package %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
 			}
 			else
 			{
-				fclose(fd);
-				sprintf(nome_saida, "SAIDA%d.h264", (count / counter_frames) + 1);
-				fd = fopen(nome_saida, "wb");
-			}
+				// Quando chegar na qntd de frames pedidos
+				// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual e escreva no novo arquivo.
+				if (pPkt->flags == AV_PKT_FLAG_KEY)
+				{
+					// Como o "último" pacote é um keyframe, não é preciso buscar outro
+					fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+					// Escreve o ultimo pacote e fecha o fd
+					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+					fclose(fd);
 
-			count++;
+					count_files++;
+
+					// Monta o novo output filename
+					sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
+					// fprintf(stderr, "\n%s\n", out_filename);
+
+					// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
+					fd = fopen(out_filename, "wb");
+					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+					// Depois, volta a contar/escrever pacotes até chegar no "último"
+				}
+				else
+				{
+					// Maracutaia
+				}
+
+				//
+				// if (pPkt->flags == AV_PKT_FLAG_KEY)
+				// {
+				// 	pPkt_keyframe = pPkt;
+				// }
+				//
+				//
+
+				count = 0;
+			}
+			// count++;
 			av_packet_unref(pPkt);
 		}
 	}
-	fclose(fd);
+	if (fd)
+	{
+		fclose(fd);
+	}
 
 	av_frame_free(&pFrm);
 	av_packet_free(&pPkt);
