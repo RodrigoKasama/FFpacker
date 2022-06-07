@@ -8,8 +8,8 @@
 #include <inttypes.h>
 #include <stdint.h>
 
-// gcc -o main rtsp_try.c -lavformat -lavutil -lavcodec
-// ./rtsp_try 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 5
+// gcc -o main split_rtsp.c -lavformat -lavutil -lavcodec
+// ./split_rtsp 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 300 10
 
 int main(int argc, char **argv)
 {
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
 	AVCodecParameters *codec_param = NULL;
 	AVCodec *codec = NULL;
 	AVStream *vStream = NULL;
-	AVPacket *pPkt = NULL, *pPkt_keyframe = NULL;
+	AVPacket *pPkt = NULL, pPkt_keyframe;
 	AVFrame *pFrm = NULL;
 	AVDictionary *opts = NULL;
 	FILE *fd;
@@ -143,6 +143,9 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	// codec_ctx->framerate = av_guess_frame_rate(in_fmt_ctx, vStream, NULL);
+	// codec_ctx->time_base = av_inv_q(codec_ctx->framerate);
+
 	fprintf(stdout, "Opening stream with decoder %s...\n", codec->name);
 	if ((ret = avcodec_open2(codec_ctx, codec, &opts)) < 0)
 	{
@@ -150,67 +153,118 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	// pPkt_keyframe = av_packet_alloc();
-	//  pFrm = av_frame_alloc();
 	// AVFrame last_key;
 
+	// Preenche o pacote com valores default
 	pPkt = av_packet_alloc();
-	int count = 0, respPack = 0, count_files = 0;
+	pFrm = av_frame_alloc();
 
-	sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
+	int count = 0, count_files = 1;
+	int aux_gop_counter = 0, gop_size = -1;
+	int create_buff_flag = 0;
+	int respPack = 0;
+
+	// Monta a primeira saida
+	sprintf(out_filename, "SAIDA_%d.h264", count_files);
+	fprintf(stderr, "Criando e preenchendo o arquivo %s..\n", out_filename);
+
 	fd = fopen(out_filename, "wb");
+
+	fprintf(stderr, "FRAMERATE: %lf GOP: %d\n", av_q2d(vStream->r_frame_rate), codec_ctx->gop_size);
+
+	// uint8_t **data_pointer;
+
+	// AVBufferRef **packets_buffer;
+
+	AVBufferRef **buffer_references;
 
 	while (1)
 	{
 		respPack = av_read_frame(in_fmt_ctx, pPkt);
-		if (respPack < 0)
-			break;
-
+		if(respPack < 0)
+		break;
 		if (pPkt->stream_index == vstream_index)
 		{
-			// pPkt->pts = (int64_t)((float)(count * 1.2));
+			// if (gop_size == -1)
+			// {
+			// 	if (pPkt->flags != AV_PKT_FLAG_KEY)
+			// 	{
+			// 		aux_gop_counter++;
+			// 	}
+			// 	else if (pPkt->flags == AV_PKT_FLAG_KEY && aux_gop_counter != 0)
+			// 	{
+			// 		aux_gop_counter++;
+			// 		gop_size = aux_gop_counter;
+			// 	}
+			// 	// continue;
+			// }
+			// else
+			// {
+				// O código abaixo só vai executar/ escrever quando o GOP for calculado
 
-			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
-			if (count < (counter_frames - 1))
-			{
-				// fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-			}
-			else
-			{
-				// Quando chegar na qntd de frames pedidos
-				// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva no novo arquivo.
-				if (pPkt->flags == AV_PKT_FLAG_KEY)
-				{
-					// Como o "último" pacote é um keyframe, não é preciso buscar outro
-					// Escreve o ultimo pacote e fecha o fd
+				// Declara o buffer uma unica vez...
+				// if (!create_buff_flag)
+				// {
 
-					// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-					fclose(fd);
+				// 	buffer_references = (AVBufferRef **)av_buffer_allocz(sizeof(AVBufferRef) * gop_size);
+				// 	create_buff_flag = 1;
+				// }
 
-					// Zera a contagem
-					count = 0;
-					// Incrementa o indice do output
-					count_files++;
-
-					// Monta o novo out_filename
-					sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
-
-					// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
-					fd = fopen(out_filename, "wb");
-
-					// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-					// Depois, volta a contar/escrever pacotes até chegar no "último"
-				}
-				// Caso o pacote de fechamento não seja um keyframe
+				// if (pPkt->flags == AV_PKT_FLAG_KEY)
+				// {
+				// 	//  = pPkt->buf;
+				// 	buffer_references[0] = pPkt->buf;
+				// }
 				// else
 				// {
-				//
+				// 	buffer_references[]
 				// }
-			}
-			count++;
+
+
+				// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
+				if (count < (counter_frames - 1))
+				{
+
+					fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+				}
+				else
+				{
+					// Quando chegar na qntd de frames pedidos
+					// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva novamente no novo arquivo.
+					if (pPkt->flags == AV_PKT_FLAG_KEY)
+					{
+						// Como o "último" pacote é um keyframe, não é preciso buscar outro
+						// Escreve o ultimo pacote e fecha o fd
+
+						fprintf(stdout, "Frame %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+						fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+						fclose(fd);
+						fprintf(stdout, "%s criado com sucesso\n\tInfo: Frames contidos neste arquivo -> %d\n", out_filename, count);
+
+						// Zera a contagem
+						count = 0;
+						// Incrementa o indice do output
+						count_files++;
+
+						// Monta o novo out_filename
+						sprintf(out_filename, "SAIDA_%d.h264", count_files);
+						fprintf(stdout, "Criando e preenchendo o arquivo %s..\n\n", out_filename);
+
+						// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
+						fd = fopen(out_filename, "wb");
+
+						fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+						fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+						// Depois, volta a contar/escrever pacotes até chegar no "último"
+					}
+					// Caso o pacote de fechamento não seja um keyframe, gere um a partir do último keyframe (e dos P-frames precedentes?)
+					else
+					{
+					}
+				}
+				count++;
+			// }
 			av_packet_unref(pPkt);
 		}
 	}
