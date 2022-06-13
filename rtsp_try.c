@@ -11,6 +11,11 @@
 // gcc -o main split_rtsp.c -lavformat -lavutil -lavcodec
 // ./split_rtsp 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 300 10
 
+AVPacket **buffer_packs;
+AVPacket *pPkt_keyframe;
+
+AVPacket create_virtual_pack(FILE *arq, char *filename, AVCodecContext *codecCTX, int counter, int file_index, int buf_index);
+
 int main(int argc, char **argv)
 {
 	if (argc != 4 && argc != 5)
@@ -39,8 +44,8 @@ int main(int argc, char **argv)
 	AVCodecParameters *codec_param = NULL;
 	AVCodec *codec = NULL;
 	AVStream *vStream = NULL;
-	AVPacket *pPkt = NULL, pPkt_keyframe;
-	AVFrame *pFrm = NULL;
+	AVPacket *pPkt = NULL;
+	AVFrame *pFrm_key = NULL, *pFrm_delta = NULL;
 	AVDictionary *opts = NULL;
 	FILE *fd;
 	// AVFormatContext *out_fmt_ctx = NULL;
@@ -157,12 +162,13 @@ int main(int argc, char **argv)
 
 	// Preenche o pacote com valores default
 	pPkt = av_packet_alloc();
-	pFrm = av_frame_alloc();
-
+	pFrm_key = av_frame_alloc(), pFrm_delta = av_frame_alloc();
+	pPkt_keyframe = av_packet_alloc();
 	int count = 0, count_files = 1;
 	int aux_gop_counter = 0, gop_size = -1;
 	int create_buff_flag = 0;
 	int respPack = 0;
+	int buffer_index = 0;
 
 	// Monta a primeira saida
 	sprintf(out_filename, "SAIDA_%d.h264", count_files);
@@ -176,94 +182,124 @@ int main(int argc, char **argv)
 
 	// AVBufferRef **packets_buffer;
 
-	AVBufferRef **buffer_references;
-
-	while (1)
+	fprintf(stderr, "olaaaa\n");
+	while (av_read_frame(in_fmt_ctx, pPkt) >= 0)
 	{
-		respPack = av_read_frame(in_fmt_ctx, pPkt);
-		if(respPack < 0)
-		break;
+		// respPack = avcodec_send_packet(codec_ctx, pPkt);
+
+		// if (respPack < 0)
+		//  // {
+		//  	fprintf(stderr, "olaaaa\n");
+		//  	break;
+		//  }
+
 		if (pPkt->stream_index == vstream_index)
 		{
-			// if (gop_size == -1)
-			// {
-			// 	if (pPkt->flags != AV_PKT_FLAG_KEY)
-			// 	{
-			// 		aux_gop_counter++;
-			// 	}
-			// 	else if (pPkt->flags == AV_PKT_FLAG_KEY && aux_gop_counter != 0)
-			// 	{
-			// 		aux_gop_counter++;
-			// 		gop_size = aux_gop_counter;
-			// 	}
-			// 	// continue;
-			// }
+			if (gop_size == -1)
+			{
+				if (pPkt->flags != AV_PKT_FLAG_KEY)
+				{
+					aux_gop_counter++;
+				}
+				else if (pPkt->flags == AV_PKT_FLAG_KEY && aux_gop_counter != 0)
+				{
+					aux_gop_counter++;
+					gop_size = aux_gop_counter;
+					// Declara o buffer uma unica vez...
+					buffer_packs = (AVPacket **)av_mallocz(sizeof(AVPacket) * gop_size);
+				}
+				av_packet_unref(pPkt);
+				continue;
+			}
+			else
+			{
+				fprintf(stderr, "O GOP e de : %d\n", gop_size);
+			}
 			// else
 			// {
-				// O código abaixo só vai executar/ escrever quando o GOP for calculado
+			// O código abaixo só vai executar/ escrever quando o GOP for calculado
 
-				// Declara o buffer uma unica vez...
-				// if (!create_buff_flag)
-				// {
+			if (pPkt->flags == AV_PKT_FLAG_KEY)
+			{
+				buffer_index = 0;
+				av_packet_copy_props(pPkt_keyframe, pPkt);
+			}
+			else
+			{
+				av_packet_copy_props(buffer_packs[buffer_index], pPkt);
+			}
+			buffer_index++;
 
-				// 	buffer_references = (AVBufferRef **)av_buffer_allocz(sizeof(AVBufferRef) * gop_size);
-				// 	create_buff_flag = 1;
-				// }
+			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
+			if (count < (counter_frames - 1))
+			{
 
-				// if (pPkt->flags == AV_PKT_FLAG_KEY)
-				// {
-				// 	//  = pPkt->buf;
-				// 	buffer_references[0] = pPkt->buf;
-				// }
-				// else
-				// {
-				// 	buffer_references[]
-				// }
-
-
-				// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
-				if (count < (counter_frames - 1))
+				fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+			}
+			else
+			{
+				fprintf(stderr, "olaaaa\n");
+				// Quando chegar na qntd de frames pedidos
+				// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva novamente no novo arquivo.
+				if (pPkt->flags == AV_PKT_FLAG_KEY)
 				{
+					// Como o "último" pacote é um keyframe, não é preciso buscar outro
+					// Escreve o ultimo pacote e fecha o fd
 
-					fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+					fprintf(stdout, "Frame %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+					fclose(fd);
+					fprintf(stdout, "%s criado com sucesso\n\tInfo: Frames contidos neste arquivo -> %d\n", out_filename, count);
+
+					// Zera a contagem
+					count = 0;
+					// Incrementa o indice do output
+					count_files++;
+
+					// Monta o novo out_filename
+					sprintf(out_filename, "SAIDA_%d.h264", count_files);
+					fprintf(stdout, "Criando e preenchendo o arquivo %s..\n\n", out_filename);
+
+					// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
+					fd = fopen(out_filename, "wb");
+
+					fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+					// Depois, volta a contar/escrever pacotes até chegar no "último"
 				}
+				// Caso o pacote de fechamento não seja um keyframe, gere um a partir do último keyframe (e dos P-frames precedentes?)
 				else
 				{
-					// Quando chegar na qntd de frames pedidos
-					// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva novamente no novo arquivo.
-					if (pPkt->flags == AV_PKT_FLAG_KEY)
-					{
-						// Como o "último" pacote é um keyframe, não é preciso buscar outro
-						// Escreve o ultimo pacote e fecha o fd
+					/*Contador de passos anteriores - Rever passos desde o último keyframe*/
 
-						fprintf(stdout, "Frame %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-						fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-						fclose(fd);
-						fprintf(stdout, "%s criado com sucesso\n\tInfo: Frames contidos neste arquivo -> %d\n", out_filename, count);
+					// create_virtual_pack(fd, out_filename, codec_ctx, count, count_files, buffer_index);
 
-						// Zera a contagem
-						count = 0;
-						// Incrementa o indice do output
-						count_files++;
-
-						// Monta o novo out_filename
-						sprintf(out_filename, "SAIDA_%d.h264", count_files);
-						fprintf(stdout, "Criando e preenchendo o arquivo %s..\n\n", out_filename);
-
-						// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
-						fd = fopen(out_filename, "wb");
-
-						fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-						fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-						// Depois, volta a contar/escrever pacotes até chegar no "último"
-					}
-					// Caso o pacote de fechamento não seja um keyframe, gere um a partir do último keyframe (e dos P-frames precedentes?)
-					else
+					int respFram = avcodec_receive_frame(codec_ctx, pFrm_delta);
+					if (respFram >= 0)
 					{
 					}
+					else if (respFram == AVERROR(EAGAIN) || respFram == AVERROR_EOF)
+						break;
+					else if (respFram < 0)
+					{
+						fprintf(stderr, "Error while receiving a frame from the decoder: %s", av_err2str(respFram));
+					}
+
+					// fwrite(buffer_references[0]->data, buffer_references[0]->size, 1, fd);
+					// fclose(fd);
+					// break;
+					// Dar reencode nos dois
+
+					// avcodec_receive_frame(codec_ctx, )
+
+					// Decodar - Acessar o frame
+					// Somar os bytes
+					// Encodar de novo
+					// }
 				}
-				count++;
+			}
+			count++;
 			// }
 			av_packet_unref(pPkt);
 		}
@@ -280,4 +316,24 @@ int main(int argc, char **argv)
 	avformat_free_context(in_fmt_ctx);
 
 	return 0;
+}
+
+AVPacket create_virtual_pack(FILE *arq, char *filename, AVCodecContext *codecCTX, int counter, int file_index, int buf_index)
+{
+	AVFrame *pFrm = av_frame_alloc();
+	int respFram;
+	for (int i = 0; i < buf_index; i++)
+	{
+		respFram = avcodec_receive_frame(codecCTX, pFrm);
+
+		if (respFram >= 0)
+		{
+		}
+		else if (respFram == AVERROR(EAGAIN) || respFram == AVERROR_EOF)
+			break;
+		else if (respFram < 0)
+		{
+			fprintf(stderr, "Error while receiving a frame from the decoder: %s", av_err2str(respFram));
+		}
+	}
 }
