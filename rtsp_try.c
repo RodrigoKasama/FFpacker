@@ -182,11 +182,42 @@ int main(int argc, char **argv)
 
 	// AVBufferRef **packets_buffer;
 
-	fprintf(stderr, "olaaaa\n");
+	// fprintf(stderr, "olaaaa\n");
+	fprintf(stderr, "Analisando GOP..\n");
+	while (gop_size == -1)
+	{
+		if (av_read_frame(in_fmt_ctx, pPkt) < 0)
+			break;
+
+		if (pPkt->stream_index == vstream_index)
+		{
+			if (pPkt->flags != AV_PKT_FLAG_KEY)
+			{
+				aux_gop_counter++;
+			}
+			else if (pPkt->flags == AV_PKT_FLAG_KEY && aux_gop_counter != 0)
+			{
+				fprintf(stderr, "Analise completa. GOP_SIZE=%d\n", ++aux_gop_counter);
+				gop_size = aux_gop_counter;
+				// Declara o buffer uma unica vez...
+				buffer_packs = (AVPacket **)av_mallocz(sizeof(AVPacket) * gop_size);
+
+				if(!buffer_packs)
+				{
+					fprintf(stderr, "Nao foi possivel alocar memória para armazenar os pacotes de montagem...");
+					exit(1);
+				}
+
+				break;
+			}
+		}
+		av_packet_unref(pPkt);
+	}
+	
+	// Mapeando e empacotando
 	while (av_read_frame(in_fmt_ctx, pPkt) >= 0)
 	{
 		// respPack = avcodec_send_packet(codec_ctx, pPkt);
-
 		// if (respPack < 0)
 		//  // {
 		//  	fprintf(stderr, "olaaaa\n");
@@ -195,28 +226,6 @@ int main(int argc, char **argv)
 
 		if (pPkt->stream_index == vstream_index)
 		{
-			if (gop_size == -1)
-			{
-				if (pPkt->flags != AV_PKT_FLAG_KEY)
-				{
-					aux_gop_counter++;
-				}
-				else if (pPkt->flags == AV_PKT_FLAG_KEY && aux_gop_counter != 0)
-				{
-					aux_gop_counter++;
-					gop_size = aux_gop_counter;
-					// Declara o buffer uma unica vez...
-					buffer_packs = (AVPacket **)av_mallocz(sizeof(AVPacket) * gop_size);
-				}
-				av_packet_unref(pPkt);
-				continue;
-			}
-			else
-			{
-				fprintf(stderr, "O GOP e de : %d\n", gop_size);
-			}
-			// else
-			// {
 			// O código abaixo só vai executar/ escrever quando o GOP for calculado
 
 			if (pPkt->flags == AV_PKT_FLAG_KEY)
@@ -233,13 +242,12 @@ int main(int argc, char **argv)
 			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
 			if (count < (counter_frames - 1))
 			{
-
 				fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
 			}
 			else
 			{
-				fprintf(stderr, "olaaaa\n");
+				// fprintf(stderr, "olaaaa\n");
 				// Quando chegar na qntd de frames pedidos
 				// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva novamente no novo arquivo.
 				if (pPkt->flags == AV_PKT_FLAG_KEY)
@@ -274,6 +282,7 @@ int main(int argc, char **argv)
 					/*Contador de passos anteriores - Rever passos desde o último keyframe*/
 
 					// create_virtual_pack(fd, out_filename, codec_ctx, count, count_files, buffer_index);
+					avcodec_decode_video2(codec_ctx, pFrm_key, 1, pPkt_keyframe);
 
 					int respFram = avcodec_receive_frame(codec_ctx, pFrm_delta);
 					if (respFram >= 0)
@@ -300,9 +309,8 @@ int main(int argc, char **argv)
 				}
 			}
 			count++;
-			// }
-			av_packet_unref(pPkt);
 		}
+		av_packet_unref(pPkt);
 	}
 
 	if (fd)
