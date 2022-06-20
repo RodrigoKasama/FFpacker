@@ -202,7 +202,7 @@ int main(int argc, char **argv)
 				// Declara o buffer uma unica vez...
 				buffer_packs = (AVPacket **)av_mallocz(sizeof(AVPacket) * gop_size);
 
-				if(!buffer_packs)
+				if (!buffer_packs)
 				{
 					fprintf(stderr, "Nao foi possivel alocar memória para armazenar os pacotes de montagem...");
 					exit(1);
@@ -213,7 +213,7 @@ int main(int argc, char **argv)
 		}
 		av_packet_unref(pPkt);
 	}
-	
+
 	// Mapeando e empacotando
 	while (av_read_frame(in_fmt_ctx, pPkt) >= 0)
 	{
@@ -282,18 +282,112 @@ int main(int argc, char **argv)
 					/*Contador de passos anteriores - Rever passos desde o último keyframe*/
 
 					// create_virtual_pack(fd, out_filename, codec_ctx, count, count_files, buffer_index);
-					avcodec_decode_video2(codec_ctx, pFrm_key, 1, pPkt_keyframe);
+					if (avcodec_decode_video2(codec_ctx, pFrm_key, 1, pPkt_keyframe) < 0)
+					{
+						fprintf(stderr, "Erro em criar um pacote virtual - Nao foi possivel decodificar no ultimo keyframe guardado\n");
+						exit(1);
+					}
 
-					int respFram = avcodec_receive_frame(codec_ctx, pFrm_delta);
-					if (respFram >= 0)
+					int offset = pFrm_key->width;
+					int stream_lenght_key = pFrm_key->height * pFrm_key->width * 3;
+
+					// uint8_t *key_frame_array = (uint8_t *)av_mallocz_array(sizeof(pFrm_key->data));
+					uint8_t *key_frame_array[stream_lenght_key];
+
+					uint8_t *delta_frame_array = av_mallocz_array(stream_lenght_key, sizeof(uint8_t));
+
+					/* Agurpando os P-Frames para depois somar/subtrair o resultado ao keyframe calculado */
+					// Começa do 1 porque o 0 é KEYFRAME
+					for (int i = 1; i < buffer_index; i++)
 					{
+
+						if (avcodec_decode_video2(codec_ctx, pFrm_delta, 1, buffer_packs[i]) < 0)
+						{
+							fprintf(stderr, "Erro em criar um pacote virtual - Nao foi possivel decodificar no %d P-Frame do buffer\n");
+							exit(1);
+						}
+
+						offset = pFrm_delta->width;
+
+						/* GAMA */
+						for (int col = 0; col < pFrm_delta->height; col++)
+						{
+							for (int row = 0; row < pFrm_delta->width; row++)
+							{
+								/* Talvez tenha que acumular os bytes de um para outro */
+								delta_frame_array[(col * offset) + row + 0] += pFrm_delta->data[0][(pFrm_delta->linesize[0] * col) + row];
+
+								/*
+								delta_frame_array[(col * offset) + row + 1] = pFrm_delta->data[1][(pFrm_delta->linesize[1] * col) + row];
+								delta_frame_array[(col * offset) + row + 2] = pFrm_delta->data[2][(pFrm_delta->linesize[2] * col) + row];
+								*/
+								//+= pFrm_delta->data[0][pFrm_delta->linesize[0] * col + row];
+							}
+						}
+
+						/* Cb e Cr */
+						for (int col = 0; col < pFrm_delta->height / 2; col++)
+						{
+							for (int row = 0; row < pFrm_delta->width / 2; row++)
+							{
+								// Cb
+								delta_frame_array[(col * offset) + row] += pFrm_delta->data[1][(pFrm_delta->linesize[1] * col) + row];
+								// Cr
+								delta_frame_array[(col * offset) + row] += pFrm_delta->data[2][(pFrm_delta->linesize[2] * col) + row];
+							}
+						}
 					}
-					else if (respFram == AVERROR(EAGAIN) || respFram == AVERROR_EOF)
-						break;
-					else if (respFram < 0)
+
+					// Fazendo um vetor "YUV" - Primeiro adiciona o GAMA, depois o Cb e o Cr
+					/* GAMA */
+					for (int col = 0; col < pFrm_key->height; col++)
 					{
-						fprintf(stderr, "Error while receiving a frame from the decoder: %s", av_err2str(respFram));
+						for (int row = 0; row < pFrm_key->width; row++)
+						{
+							key_frame_array[(col * offset) + row + 0] = pFrm_key->data[0][(pFrm_key->linesize[0] * col) + row];
+
+							// /* Talvez thenha que acumular os bytes de um para outro */
+							// /*
+							// key_frame_array[(col * offset) + row + 1] = pFrm_key->data[1][(pFrm_key->linesize[1] * col) + row];
+							// key_frame_array[(col * offset) + row + 2] = pFrm_key->data[2][(pFrm_key->linesize[2] * col) + row];
+							// //+= pFrm_delta->data[0][pFrm_delta->linesize[0] * col + row];
+							// */
+						}
 					}
+
+					/* Cb e Cr*/
+					for (int col = 0; col < pFrm_key->height / 2; col++)
+					{
+						for (int row = 0; row < pFrm_key->width / 2; row++)
+						{
+							// Cb
+							key_frame_array[(col * offset) + row] = pFrm_key->data[1][(pFrm_key->linesize[1] * col) + row];
+							// Cr
+							key_frame_array[(col * offset) + row] = pFrm_key->data[2][(pFrm_key->linesize[2] * col) + row];
+						}
+					}
+
+					// uint8_t *delta_frame_array = (uint8_t *)malloc(sizeof(pFrm_delta->data));
+					// uint8_t *delta_frame_array[stream_lenght_delta];
+
+					/* Precorrer o vetor... a cada iteração, somar os bits... */
+
+					AVFrame *virtual_frm = av_frame_alloc();
+					for (int k = 0; k < stream_lenght_key; k++)
+					{
+						key_frame_array[k] += delta_frame_array[k];
+					}
+
+					// int respFram = avcodec_receive_frame(codec_ctx, pFrm_delta);
+					// if (respFram >= 0)
+					// {
+					// }
+					// else if (respFram == AVERROR(EAGAIN) || respFram == AVERROR_EOF)
+					// 	break;
+					// else if (respFram < 0)
+					// {
+					// 	fprintf(stderr, "Error while receiving a frame from the decoder: %s", av_err2str(respFram));
+					// }
 
 					// fwrite(buffer_references[0]->data, buffer_references[0]->size, 1, fd);
 					// fclose(fd);
