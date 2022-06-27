@@ -9,25 +9,32 @@
 #include <stdint.h>
 
 // gcc -o main rtsp_try.c -lavformat -lavutil -lavcodec
-// ./rtsp_try 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 5
-
+// ./rtsp_try 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 300 'saida_padrao'
+// 2.8*PTS
 int main(int argc, char **argv)
 {
-	if (argc != 4 && argc != 5)
+	if (argc != 7 && argc != 8)
 	{
-		fprintf(stderr, "\n Usage: %s <url> <protocols> <split_frames> -<timeout-sec>\n\n", argv[0]);
-		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 300 10\n\n", argv[0]);
-		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
+		fprintf(stderr, "\nArgumentos informados: %d\n", argc);
+		fprintf(stderr, "   Usage: %s <url> <protocols> <split_frames> <output_pattern> <dst_dir_path> <filelist_path> -<timeout-sec>\n\n", argv[0]);
+		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 300 SAIDA 10\n\n", argv[0]);
+		fprintf(stderr, "   ** Escrito por: Rodrigo Parracho **\n\n");
 		exit(1);
 	}
 
-	char *url = "rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
+	char *url = argv[1]; //"rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
 	// Não fazer hardcode nos protocolos, resulta em segfault no strtok()
 	char *protocols = argv[2];
-	int counter_frames = 300; // 349 -> Numero primo grande, para o vídeo não ser muito curto..
-	char timeout[10];
-	char out_filename[13];
+	int counter_frames = atoi(argv[3]); // 300; // 349 -> Numero primo grande, para o vídeo não ser muito curto..
+	char aux_filename[20];
+	strcpy(aux_filename, argv[4]);
+	char *dir_path = argv[5];
+	char *listfile_path = argv[6];
 
+	char output_path[40];
+	char output_filename[30];
+
+	char timeout[10];
 	char *curr_protocol = NULL;
 	int vstream_index = -1;
 
@@ -42,12 +49,19 @@ int main(int argc, char **argv)
 	AVPacket *pPkt = NULL, *pPkt_keyframe = NULL;
 	AVFrame *pFrm = NULL;
 	AVDictionary *opts = NULL;
-	FILE *fd;
+	FILE *fd, *fd_listfile;
 	// AVFormatContext *out_fmt_ctx = NULL;
 
-	if (argc == 5)
+	fd_listfile = fopen(listfile_path, "ab");
+	if (!fd_listfile)
 	{
-		sprintf(timeout, "%s000000", argv[4]);
+		fprintf(stderr, "Nao foi possivel abrir/criar a lista de registro de arquivos '%s'", listfile_path);
+		exit(1);
+	}
+
+	if (argc == 8)
+	{
+		sprintf(timeout, "%s000000", argv[7]);
 		av_dict_set(&opts, "stimeout", timeout, 0);
 	}
 
@@ -150,15 +164,29 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	// pPkt_keyframe = av_packet_alloc();
-	//  pFrm = av_frame_alloc();
-	// AVFrame last_key;
-
 	pPkt = av_packet_alloc();
 	int count = 0, respPack = 0, count_files = 0;
 
-	sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
-	fd = fopen(out_filename, "wb");
+	for (int i = 0; i < argc; i++)
+	{
+		fprintf(stderr, "%s\n", argv[i]);
+	}
+
+	sprintf(output_filename, "%s_%d.h264", aux_filename, count_files + 1);
+	sprintf(output_path, "%s/%s", dir_path, output_filename);
+	sprintf(output_filename, "file '%s'", output_filename);
+
+	fd = fopen(output_path, "wb");
+	if (!fd)
+	{
+		fprintf(stderr, "Nao foi possivel criar o arquivo %s", output_path);
+		exit(1);
+	}
+	else
+	{
+		fwrite(output_filename, 1, sizeof(output_filename), fd_listfile);
+		fwrite('\n', 1, sizeof(char), fd_listfile);
+	}
 
 	while (1)
 	{
@@ -168,8 +196,6 @@ int main(int argc, char **argv)
 
 		if (pPkt->stream_index == vstream_index)
 		{
-			// pPkt->pts = (int64_t)((float)(count * 1.2));
-
 			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
 			if (count < (counter_frames - 1))
 			{
@@ -194,12 +220,25 @@ int main(int argc, char **argv)
 					// Incrementa o indice do output
 					count_files++;
 
-					// Monta o novo out_filename
-					sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
+					// Monta o novo output_path
+					sprintf(output_filename, "%s_%d.h264", aux_filename, count_files + 1);
+					sprintf(output_path, "%s/%s", dir_path, output_filename);
+					// sprintf(output_path, "%s/%s_%d.h264", dir_path, aux_filename, count_files + 1);
+					// strcat(output_path, aux_filename);
+					// sprintf(output_path, "SAIDA_%d.h264", count_files + 1);
 
-					// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
-					fd = fopen(out_filename, "wb");
-
+					// Abre o novo output_path e escreve o mesmo pacote, já que ele é keyframe!
+					fd = fopen(output_path, "wb");
+					if (!fd)
+					{
+						fprintf(stderr, "Nao foi possivel abrir o arquivo %s", output_path);
+						exit(1);
+					}
+					else
+					{
+						fwrite(output_filename, 1, sizeof(output_filename), fd_listfile);
+						fwrite('\n', 1, sizeof(char), fd_listfile);
+					}
 					// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
 					// Depois, volta a contar/escrever pacotes até chegar no "último"
@@ -218,6 +257,10 @@ int main(int argc, char **argv)
 	if (fd)
 	{
 		fclose(fd);
+	}
+	if (fd_listfile)
+	{
+		fclose(fd_listfile);
 	}
 
 	// av_frame_free(&pFrm);
