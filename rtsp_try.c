@@ -2,20 +2,19 @@
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
-#include <stdint.h>
+#include <stdarg.h>
 
 // gcc -o main rtsp_try.c -lavformat -lavutil -lavcodec
 // ./rtsp_try 'rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1' tcp,udp 5
 
-int main(int argc, char **argv)
-{
+double get_framerate_of_file(char *IN_filename, int video_index);
+
+int main(int argc, char **argv) {
 	if (argc != 4 && argc != 5)
 	{
-		fprintf(stderr, "\n Usage: %s <url> <protocols> <split_frames> -<timeout-sec>\n\n", argv[0]);
+		fprintf(stderr, "\n Usage: %s <url> <protocols> <current_path> -<timeout-sec>\n\n", argv[0]);
 		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 300 10\n\n", argv[0]);
 		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
 		exit(1);
@@ -24,10 +23,12 @@ int main(int argc, char **argv)
 	char *url = "rtsp://admin:123456@movplay.com.br:5540/H264?ch=1&subtype=1";
 	// Não fazer hardcode nos protocolos, resulta em segfault no strtok()
 	char *protocols = argv[2];
-	int counter_frames = 300; // 349 -> Numero primo grande, para o vídeo não ser muito curto..
+	// int counter_frames = 300; // 349 -> Numero primo grande, para o vídeo não ser muito curto..
 	char timeout[10];
-	char out_filename[13];
-
+	char *temp_path = "/tmp/auxiliar.h264";
+	char *dir_output = argv[3];
+	char filename[30];
+	char final_path[100];
 	char *curr_protocol = NULL;
 	int vstream_index = -1;
 
@@ -150,66 +151,56 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	// pPkt_keyframe = av_packet_alloc();
-	//  pFrm = av_frame_alloc();
-	// AVFrame last_key;
-
 	pPkt = av_packet_alloc();
 	int count = 0, respPack = 0, count_files = 0;
 
-	sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
-	fd = fopen(out_filename, "wb");
+	fd = fopen(temp_path, "wb");
+	int flag = 1;
+	double framerate = 0;
 
-	while (1)
+	while (av_read_frame(in_fmt_ctx, pPkt) >= 0)
 	{
-		respPack = av_read_frame(in_fmt_ctx, pPkt);
-		if (respPack < 0)
-			break;
-
 		if (pPkt->stream_index == vstream_index)
 		{
 			// pPkt->pts = (int64_t)((float)(count * 1.2));
+			// fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 
-			// Se ainda não chegou na quantidade de frames pedida, continue escrevendo..
-			if (count < (counter_frames - 1))
+			fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+
+			// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva no novo arquivo.
+			if (pPkt->flags == AV_PKT_FLAG_KEY && flag == 0)
 			{
-				// fprintf(stdout, "Package %d -> HAS_KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+				// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
+				// fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+				fclose(fd);
+				// Acessa o arquivo escrito e pega a informação do fps
+				framerate = get_framerate_of_file(temp_path, vstream_index);
+
+				// Framerate com apenas 2 casas decimais (configurável?)
+				// Monta o filename de acordo com as propriedades e um counter
+				sprintf(filename, "file_%d_%.2f_%dx%d_%d.h264", count + 1, framerate, codec_ctx->width, codec_ctx->height, count_files + 1);
+
+				// Forma o diretório final do bloco escrito
+				strcpy(final_path, dir_output);
+				strcat(final_path, filename);
+				fprintf(stderr, "Arquivo: %s\nCaminho:%s\nCaminho Final:%s\n\n", filename, dir_output, final_path);
+				// Move o bloco para um local com nome das propriedades () CAMINHO FINAL.
+				rename(temp_path, final_path);
+
+				// Zera a contagem
+				count = 0;
+				// Incrementa o indice do output
+				count_files++;
+
+				// Abre o novo dir_output e escreve o mesmo pacote, já que ele é keyframe!
+				fd = fopen(temp_path, "wb");
+
+				// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
 				fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
+				// Depois, volta a contar/escrever pacotes até chegar no "último"
 			}
-			else
-			{
-				// Quando chegar na qntd de frames pedidos
-				// Caso o pacote de fechamento tenha um keyframe, só escreva, feche o fd atual, crie e escreva no novo arquivo.
-				if (pPkt->flags == AV_PKT_FLAG_KEY)
-				{
-					// Como o "último" pacote é um keyframe, não é preciso buscar outro
-					// Escreve o ultimo pacote e fecha o fd
 
-					// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-					fclose(fd);
-
-					// Zera a contagem
-					count = 0;
-					// Incrementa o indice do output
-					count_files++;
-
-					// Monta o novo out_filename
-					sprintf(out_filename, "SAIDA_%d.h264", count_files + 1);
-
-					// Abre o novo out_filename e escreve o mesmo pacote, já que ele é keyframe!
-					fd = fopen(out_filename, "wb");
-
-					// fprintf(stdout, "Frame %d -> KEY: %d Size: %dB\n", count, pPkt->flags, pPkt->size);
-					fwrite(pPkt->buf->data, pPkt->buf->size, 1, fd);
-					// Depois, volta a contar/escrever pacotes até chegar no "último"
-				}
-				// Caso o pacote de fechamento não seja um keyframe
-				// else
-				// {
-				//
-				// }
-			}
+			flag = 0;
 			count++;
 			av_packet_unref(pPkt);
 		}
@@ -226,4 +217,35 @@ int main(int argc, char **argv)
 	avformat_free_context(in_fmt_ctx);
 
 	return 0;
+}
+
+double get_framerate_of_file(char *IN_filename, int video_index) {
+	AVFormatContext *fmt_ctx = avformat_alloc_context();
+	AVStream *vStream2 = NULL;
+	double fps = 0;
+
+	if (!fmt_ctx)
+	{
+		fprintf(stderr, "Couldn't get input format (rtsp)");
+		return -1;
+	}
+	if (avformat_open_input(&fmt_ctx, IN_filename, NULL, NULL) != 0)
+	{
+		fprintf(stderr, "Couldn't open file...\n");
+		return -1;
+	}
+	if (avformat_find_stream_info(fmt_ctx, NULL) < 0)
+	{
+		fprintf(stderr, "Couldn't find stream information\n");
+		return -1;
+	}
+	vStream2 = fmt_ctx->streams[video_index];
+	if (!vStream2)
+	{
+		fprintf(stderr, "Couldn't find video stream of the input, aborting\n");
+		return -1;
+	}
+	fps = av_q2d(vStream2->avg_frame_rate);
+	avformat_free_context(fmt_ctx);
+	return fps;
 }
