@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
 	if (argc != 4 && argc != 5)
 	{
 		fprintf(stderr, "\n Usage: %s <url> <protocols> <current_path> -<timeout-sec>\n\n", argv[0]);
-		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp 300 10\n\n", argv[0]);
+		fprintf(stderr, "   Ex: %s rtsp://1.2.3.45/video tcp,udp '/home/parracho/MOVIEIT/tarefa3' 10\n\n", argv[0]);
 		fprintf(stderr, "    ** Escrito por: Rodrigo Parracho **\n\n");
 		exit(1);
 	}
