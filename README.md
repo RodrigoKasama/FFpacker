@@ -1,3 +1,3 @@
-# MOVIEIT-FFmpeg
+# FFmpeg
 
 Utilizar o repositório do leandro moreira para trabalhar com apenas pacotes...
